@@ -1,16 +1,23 @@
 # Version Bumper
 
-A reusable GitHub Action for bumping semantic versions in project files. Supports both XML files (`.csproj`, `Directory.Build.props`, etc.) and plain text files (`VERSION`, `.version`, etc.).
+A reusable GitHub Action for bumping semantic versions in project files. Supports XML files (`.csproj`, `Directory.Build.props`, etc.), JSON files (`package.json`, etc.), CMake files (`CMakeLists.txt`), and plain text files (`VERSION`, `.version`, etc.).
+
+## Release Notes
+
+See [CHANGELOG.md](CHANGELOG.md) for migration notes and release history.
 
 ## How It Works
 
 1. Reads the current version from the specified file
 2. Bumps the version according to the selected bump type
 3. Writes the updated version back to the file
-4. Optionally commits, tags, and pushes the change
+4. Applies the calculated version to any additional files
+5. Optionally commits, tags, and pushes the change
 
 The action auto-detects file type based on extension:
 - **XML files** (`.xml`, `.csproj`, `.props`, `.targets`, `.vbproj`, `.fsproj`): Reads/writes using XPath
+- **JSON files** (`.json`): Reads/writes a JSON key (default: `version`)
+- **CMakeLists.txt**: Reads/writes the single `project(... VERSION ...)` value
 - **Everything else** (`.version`, `.txt`, no extension): Reads/writes as plain text
 
 ## Inputs
@@ -24,32 +31,39 @@ The action auto-detects file type based on extension:
 
 ### Optional
 
-| Input                    | Description                                                                                                    | Default               |
-|--------------------------|----------------------------------------------------------------------------------------------------------------|-----------------------|
-| `custom_version`         | Exact version string to set. Only used when `bump` is `custom`. Must match format `X.Y.Z` or `X.Y.Z-preview.N` | `''`                  |
-| `version_element`        | XPath expression to locate the version element in XML files. Ignored for plain text files                      | `.//Version`          |
-| `commit`                 | Whether to commit the version change to the current branch                                                     | `false`               |
-| `tag`                    | Whether to create a git tag in the format `{tag_prefix}{version}`                                              | `false`               |
-| `tag_prefix`             | Prefix for the git tag. The tag will be `{tag_prefix}{version}`                                                | `v`                   |
-| `commit_message`         | Template for the commit message. Supports `{version}` and `{tag}` placeholders                                 | `VersionBump : {tag}` |
-| `push`                   | Whether to push the commit and tag to the remote origin                                                        | `false`               |
-| `floating_major_version` | Create/update a floating major version tag (e.g. `v1` for `v1.2.0`). Requires `tag` to be `true`.              | `false`               |
+| Input                      | Description                                                                                                                                                              | Default                                  |
+|----------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------|
+| `custom_version`           | Exact version string to set. Only used when `bump` is `custom`. Must match format `X.Y.Z` or `X.Y.Z-preview.N`                                                           | `''`                                     |
+| `version_element`          | XPath expression for XML files, or dot-separated JSON key path (for example `metadata.version`). Ignored for plain text files                                            | `.//Version` for XML, `version` for JSON |
+| `additional_version_files` | Newline-separated repository-relative files to update to the calculated version. Uses each handler's default location; `version_element` applies only to `version_file`. | `''`                                     |
+| `commit`                   | Whether to commit the version change to the current branch                                                                                                               | `false`                                  |
+| `tag`                      | Whether to create a git tag in the format `{tag_prefix}{version}`                                                                                                        | `false`                                  |
+| `tag_prefix`               | Prefix for the git tag. The tag will be `{tag_prefix}{version}`                                                                                                          | `v`                                      |
+| `commit_message`           | Template for the commit message. Supports `{version}` and `{tag}` placeholders                                                                                           | `VersionBump : {tag}`                    |
+| `push`                     | Whether to push the commit and tag to the remote origin                                                                                                                  | `false`                                  |
+| `floating_major_version`   | Create/update a floating major version tag (e.g. `v1` for `v1.2.0`). Requires `tag` to be `true`.                                                                        | `false`                                  |
+| `floating_minor_version`   | Create/update a floating minor version tag (e.g. `v1.2` for `v1.2.0`). Requires `tag` to be `true`.                                                                      | `false`                                  |
+| `preview_label`            | Label for preview versions. E.g. `BETA` for `1.0.1-BETA-1`                                                                                                               | `preview`                                |
+| `preview_separator`        | Separator between label and number. E.g. `-` for `1.0.1-BETA-1`                                                                                                          | `.`                                      |
 
 ## Outputs
 
-| Output         | Description                                                                  | Example  |
-|----------------|------------------------------------------------------------------------------|----------|
-| `version`      | The new version string after bumping                                         | `1.2.0`  |
-| `old_version`  | The previous version string before bumping                                   | `1.1.3`  |
-| `tag`          | The full git tag name (prefix + version)                                     | `v1.2.0` |
-| `floating_tag` | The floating major version tag name (if `floating_major_version` is enabled) | `v1`     |
+| Output               | Description                                     | Example  |
+|----------------------|-------------------------------------------------|----------|
+| `version`            | The new version string after bumping            | `1.2.0`  |
+| `old_version`        | The previous version string before bumping      | `1.1.3`  |
+| `tag`                | The full git tag name (prefix + version)        | `v1.2.0` |
+| `floating_major_tag` | The floating major version tag name, if enabled | `v1`     |
+| `floating_minor_tag` | The floating minor version tag name, if enabled | `v1.2`   |
 
 ## Version Format
 
 The action supports semantic versioning with an optional preview suffix:
 
 - **Stable**: `X.Y.Z` (e.g. `1.2.3`)
-- **Preview**: `X.Y.Z-preview.N` (e.g. `1.2.3-preview.1`)
+- **Preview**: `X.Y.Z-{label}{separator}N` (e.g. `1.2.3-preview.1`, `1.0.1-BETA-1`)
+
+The preview label defaults to `preview` and separator to `.`, both customizable via `preview_label` and `preview_separator` inputs.
 
 ## Bump Rules
 
@@ -65,19 +79,19 @@ The action supports semantic versioning with an optional preview suffix:
 
 When bumping a version that already has a preview suffix:
 
-| Bump Type | From              | To                | Description                      |
-|-----------|-------------------|-------------------|----------------------------------|
-| `major`   | `1.2.3-preview.5` | `2.0.0-preview.0` | Bumps major, resets preview to 0 |
-| `minor`   | `1.2.3-preview.5` | `1.3.0-preview.0` | Bumps minor, resets preview to 0 |
-| `patch`   | `1.2.3-preview.5` | `1.2.4-preview.0` | Bumps patch, resets preview to 0 |
-| `preview` | `1.2.3-preview.5` | `1.2.3-preview.6` | Increments preview number by 1   |
+| Bump Type | From              | To                | Description                               |
+|-----------|-------------------|-------------------|-------------------------------------------|
+| `major`   | `1.2.3-preview.5` | `2.0.0`           | Bumps major and produces a stable version |
+| `minor`   | `1.2.3-preview.5` | `1.3.0`           | Bumps minor and produces a stable version |
+| `patch`   | `1.2.3-preview.5` | `1.2.4`           | Bumps patch and produces a stable version |
+| `preview` | `1.2.3-preview.5` | `1.2.3-preview.6` | Increments preview number by 1            |
 
 ## Examples
 
 ### VERSION file (plain text)
 
 ```yaml
-- uses: Code-Of-Chaos/action-version-bumper@v1
+- uses: Code-Of-Chaos/action-version-bumper@v2
   with:
     version_file: VERSION
     bump: minor
@@ -88,16 +102,56 @@ Given a `VERSION` file containing `1.0.0`, this produces `1.1.0`.
 ### Directory.Build.props (XML)
 
 ```yaml
-- uses: Code-Of-Chaos/action-version-bumper@v1
+- uses: Code-Of-Chaos/action-version-bumper@v2
   with:
     version_file: src/Directory.Build.props
     bump: minor
 ```
 
+### package.json (JSON)
+
+```yaml
+- uses: Code-Of-Chaos/action-version-bumper@v2
+  with:
+    version_file: package.json
+    bump: minor
+```
+
+The `version_element` input specifies the JSON key path to update. It defaults to `version` for JSON files, so it can be omitted for `package.json`. For nested values, use a dot-separated path such as `metadata.version`.
+
+### CMakeLists.txt
+
+```yaml
+- uses: Code-Of-Chaos/action-version-bumper@v2
+  with:
+    version_file: src/InfiniFrame.NativeBridge/Native/CMakeLists.txt
+    bump: patch
+```
+
+The CMake handler updates the single `project(... VERSION X.Y.Z ...)` declaration and preserves all other file content, including whitespace and line endings. It fails if the declaration is missing or more than one matching declaration exists.
+
+### Bump multiple version files
+
+The required `version_file` is the canonical source: its version is read and bumped exactly once. Additional files receive that exact resulting version and are not bumped independently. Paths are relative to `GITHUB_WORKSPACE` (the repository root), and blank lines are ignored.
+
+```yaml
+- uses: Code-Of-Chaos/action-version-bumper@v2
+  with:
+    version_file: src/Directory.Build.props
+    bump: minor
+    additional_version_files: |
+      src/InfiniFrame.NativeBridge/Native/CMakeLists.txt
+      src/frontend/package.json
+      apps/web/package.json
+      packages/shared/package.json
+```
+
+Additional XML files use `.//Version`, JSON files use `version`, CMakeLists.txt files use `project(... VERSION ...)`, and plain-text files use their complete contents. Per-file element overrides are intentionally not supported; use the file type defaults or make that file the canonical `version_file` when a custom element is required. All files are staged in one commit when `commit` is enabled. If any additional file cannot be read or updated, the action stops before commit, tagging, or pushing.
+
 ### Bump, commit, tag, and push
 
 ```yaml
-- uses: Code-Of-Chaos/action-version-bumper@v1
+- uses: Code-Of-Chaos/action-version-bumper@v2
   with:
     version_file: VERSION
     bump: minor
@@ -109,7 +163,7 @@ Given a `VERSION` file containing `1.0.0`, this produces `1.1.0`.
 ### Set a custom version
 
 ```yaml
-- uses: Code-Of-Chaos/action-version-bumper@v1
+- uses: Code-Of-Chaos/action-version-bumper@v2
   with:
     version_file: VERSION
     bump: custom
@@ -123,7 +177,7 @@ Given a `VERSION` file containing `1.0.0`, this produces `1.1.0`.
 If your version is stored in a non-standard element:
 
 ```yaml
-- uses: Code-Of-Chaos/action-version-bumper@v1
+- uses: Code-Of-Chaos/action-version-bumper@v2
   with:
     version_file: src/MyProject.csproj
     bump: patch
@@ -133,7 +187,7 @@ If your version is stored in a non-standard element:
 ### Custom tag prefix
 
 ```yaml
-- uses: Code-Of-Chaos/action-version-bumper@v1
+- uses: Code-Of-Chaos/action-version-bumper@v2
   with:
     version_file: VERSION
     bump: patch
@@ -143,10 +197,25 @@ If your version is stored in a non-standard element:
 
 This creates tags like `release-1.2.3` instead of `v1.2.3`.
 
+### Custom preview label
+
+Use a custom label and separator for preview versions (e.g. for Obsidian beta releases):
+
+```yaml
+- uses: Code-Of-Chaos/action-version-bumper@v2
+  with:
+    version_file: VERSION
+    bump: preview
+    preview_label: 'BETA'
+    preview_separator: '-'
+```
+
+This produces versions like `1.0.0-BETA-1` instead of `1.0.0-preview.1`.
+
 ### Custom commit message
 
 ```yaml
-- uses: Code-Of-Chaos/action-version-bumper@v1
+- uses: Code-Of-Chaos/action-version-bumper@v2
   with:
     version_file: VERSION
     bump: patch
@@ -159,7 +228,7 @@ This creates tags like `release-1.2.3` instead of `v1.2.3`.
 Automatically maintain a floating major version tag (e.g. `v1`) that always points to the latest `v1.x.x` release:
 
 ```yaml
-- uses: Code-Of-Chaos/action-version-bumper@v1
+- uses: Code-Of-Chaos/action-version-bumper@v2
   with:
     version_file: VERSION
     bump: minor
@@ -167,16 +236,34 @@ Automatically maintain a floating major version tag (e.g. `v1`) that always poin
     tag: 'true'
     push: 'true'
     floating_major_version: 'true'
+    floating_minor_version: 'true'
 ```
 
 When releasing `v1.2.0`, this also updates `v1` to point to the same commit. Users can then reference `@v1` in their workflows to always get the latest `v1.x.x` release.
+
+### Floating minor version tag
+
+Use `floating_minor_version` to maintain a floating minor tag (e.g. `v1.2`) that points to the latest `v1.2.x` release:
+
+```yaml
+- uses: Code-Of-Chaos/action-version-bumper@v2
+  with:
+    version_file: VERSION
+    bump: patch
+    commit: 'true'
+    tag: 'true'
+    push: 'true'
+    floating_minor_version: 'true'
+```
+
+When releasing `v1.2.1`, this also updates `v1.2` to point to the same commit. Both floating options can be enabled together to update both tags.
 
 ### Use outputs in downstream steps
 
 ```yaml
 - name: Bump version
   id: version
-  uses: Code-Of-Chaos/action-version-bumper@v1
+  uses: Code-Of-Chaos/action-version-bumper@v2
   with:
     version_file: VERSION
     bump: minor
@@ -221,7 +308,7 @@ jobs:
 
       - name: Bump version
         id: version
-        uses: Code-Of-Chaos/action-version-bumper@v1
+        uses: Code-Of-Chaos/action-version-bumper@v2
         with:
           version_file: VERSION
           bump: ${{ inputs.bump }}
@@ -244,30 +331,44 @@ The Python script can be used directly without the GitHub Action:
 
 ```bash
 # Bump patch in a VERSION file
-python scripts/bump_version.py patch VERSION
+python src/bump_version.py patch VERSION
 
 # Bump minor in an XML file
-python scripts/bump_version.py minor src/Directory.Build.props
+python src/bump_version.py minor src/Directory.Build.props
+
+# Bump patch in a package.json
+python src/bump_version.py patch package.json version
+
+# Apply an already-calculated version to an additional file
+python src/bump_version.py --set-version CMakeLists.txt 1.2.4
 
 # Set a custom version with custom xpath
-python scripts/bump_version.py custom src/Directory.Build.props .//Version 2.0.0-preview.1
+python src/bump_version.py custom src/Directory.Build.props .//Version 2.0.0-preview.1
 
 # Bump using a custom xpath element
-python scripts/bump_version.py patch src/MyProject.csproj .//PackageVersion
+python src/bump_version.py patch src/MyProject.csproj .//PackageVersion
+
+# Bump preview with custom label
+python src/bump_version.py preview VERSION .//Version "" BETA -
+
+# Bump preview with custom label and dot separator
+python src/bump_version.py preview VERSION .//Version "" RC .
 ```
 
 ### CLI Arguments
 
 ```
-bump_version.py <bump> <version_file> [version_element] [custom_version]
+bump_version.py <bump> <version_file> [version_element] [custom_version] [preview_label] [preview_separator]
 ```
 
-| Argument          | Description                                                          |
-|-------------------|----------------------------------------------------------------------|
-| `bump`            | Bump type: `major`, `minor`, `patch`, `preview`, or `custom`         |
-| `version_file`    | Path to the file containing the version                              |
-| `version_element` | XPath to the version element (XML files only, default: `.//Version`) |
-| `custom_version`  | Version string when bump type is `custom`                            |
+| Argument            | Description                                                                                                               |
+|---------------------|---------------------------------------------------------------------------------------------------------------------------|
+| `bump`              | Bump type: `major`, `minor`, `patch`, `preview`, or `custom`                                                              |
+| `version_file`      | Path to the file containing the version                                                                                   |
+| `version_element`   | XPath to the version element (XML) or dot-separated JSON key path (JSON). Defaults to `.//Version`/`version` by file type |
+| `custom_version`    | Version string when bump type is `custom`                                                                                 |
+| `preview_label`     | Label for preview versions. Default: `preview`                                                                            |
+| `preview_separator` | Separator between label and number. Default: `.`                                                                          |
 
 ## File Type Detection
 
@@ -276,9 +377,15 @@ The action uses file extension to determine how to read/write the version:
 | Extension                                                     | Mode        | Example Files                               |
 |---------------------------------------------------------------|-------------|---------------------------------------------|
 | `.xml`, `.csproj`, `.props`, `.targets`, `.vbproj`, `.fsproj` | XML (XPath) | `Directory.Build.props`, `MyProject.csproj` |
+| `.json`                                                       | JSON (key)  | `package.json`, `app-version.json`          |
+| filename `CMakeLists.txt`                                     | CMake       | `CMakeLists.txt`                            |
 | Anything else                                                 | Plain text  | `VERSION`, `.version`, `version.txt`        |
 
 For plain text files, the file must contain only the version string (with optional trailing newline).
+
+For JSON files, the `version_element` input specifies which key path to read/write. For `package.json`, it defaults to `version`; nested paths such as `metadata.version` are also supported.
+
+For CMake files, the handler finds the single `project(... VERSION ...)` declaration. The `--set-version` CLI mode is used internally for additional files and does not calculate another bump.
 
 ## Running Tests
 
@@ -289,4 +396,4 @@ pytest tests/ -v
 
 ## License
 
-MIT
+GPL v3

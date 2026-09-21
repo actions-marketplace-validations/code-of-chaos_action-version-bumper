@@ -12,6 +12,25 @@ on:
                 default: true
 
 jobs:
+    actionlint:
+        name: "CI: actionlint"
+        runs-on: ubuntu-latest
+        steps:
+            -   name: Checkout
+                uses: actions/checkout@v7
+
+            -   name: Setup Go
+                uses: actions/setup-go@v7
+                with:
+                    go-version: stable
+
+            -   name: Install actionlint
+                run: go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+
+            -   name: Lint GitHub Actions
+                run: |
+                    "$HOME/go/bin/actionlint"
+
     python-tests:
         name: "CI: python"
         if: ${{ inputs.run_python_tests }}
@@ -31,8 +50,8 @@ jobs:
             -   name: Run tests
                 run: pytest tests/ -v
 
-    action-test-version:
-        name: "CI: action/version/${{ matrix.bump }}"
+    action-test-version-files:
+        name: "CI: action/version-files/${{ matrix.bump }}"
         if: ${{ inputs.run_action_tests }}
         runs-on: ubuntu-latest
         strategy:
@@ -40,84 +59,226 @@ jobs:
             matrix:
                 include:
                     -   bump: major
-                        expected_old: "0.1.0"
-                        expected_new: "1.0.0"
-                        expected_tag: "v1.0.0"
+                        start_version: "1.2.3"
+                        expected_version: "2.0.0"
                     -   bump: minor
-                        expected_old: "0.1.0"
-                        expected_new: "0.2.0"
-                        expected_tag: "v0.2.0"
+                        start_version: "1.2.3"
+                        expected_version: "1.3.0"
                     -   bump: patch
-                        expected_old: "0.1.0"
-                        expected_new: "0.1.1"
-                        expected_tag: "v0.1.1"
+                        start_version: "1.2.3"
+                        expected_version: "1.2.4"
                     -   bump: custom
-                        expected_old: "0.1.0"
-                        expected_new: "2.0.0"
-                        expected_tag: "v2.0.0"
+                        start_version: "1.2.3"
+                        expected_version: "2.0.0"
                         custom_version: "2.0.0"
-        steps:
-            -   name: Checkout
-                uses: actions/checkout@v7
-
-            -   name: Create test VERSION file
-                run: echo "0.1.0" > VERSION
-
-            -   name: Test action
-                id: bump
-                uses: ./
-                with:
-                    version_file: VERSION
-                    bump: ${{ matrix.bump }}
-                    custom_version: ${{ matrix.custom_version || '' }}
-
-            -   name: Verify output
-                run: |
-                    [ "${{ steps.bump.outputs.version }}" = "${{ matrix.expected_new }}" ] || exit 1
-                    [ "${{ steps.bump.outputs.old_version }}" = "${{ matrix.expected_old }}" ] || exit 1
-                    [ "${{ steps.bump.outputs.tag }}" = "${{ matrix.expected_tag }}" ] || exit 1
-
-    action-test-xml:
-        name: "CI: action/xml/${{ matrix.bump }}"
-        if: ${{ inputs.run_action_tests }}
-        runs-on: ubuntu-latest
-        strategy:
-            fail-fast: false
-            matrix:
-                include:
-                    -   bump: major
-                        expected_new: "2.0.0"
-                    -   bump: minor
-                        expected_new: "1.1.0"
-                    -   bump: patch
-                        expected_new: "1.0.1"
-                    -   bump: custom
-                        expected_new: "3.0.0"
-                        custom_version: "3.0.0"
         steps:
             - name: Checkout
               uses: actions/checkout@v7
+              with:
+                  fetch-depth: 0
 
-            -   name: Create test XML file
-                run: |
-                    cat > Directory.Build.props << 'EOF'
-                    <?xml version="1.0" encoding="utf-8"?>
-                    <Project>
-                      <PropertyGroup><Version>1.0.0</Version></PropertyGroup>
-                    </Project>
-                    EOF
+            - name: Create test files
+              run: |
+                  echo "${{ matrix.start_version }}" > VERSION
+                  cat > Directory.Build.props << 'EOF'
+                  <?xml version="1.0" encoding="utf-8"?>
+                  <Project>
+                    <PropertyGroup><Version>${{ matrix.start_version }}</Version></PropertyGroup>
+                  </Project>
+                  EOF
+                  cat > package.json << 'EOF'
+                  {
+                    "name": "test-package",
+                    "version": "${{ matrix.start_version }}",
+                    "description": "JSON integration test"
+                  }
+                  EOF
+                  echo "9.8.7" > floating.VERSION
+                  echo "9.8.7" > floating-minor.VERSION
+                  echo "3.0.0" > multi.VERSION
+                  mkdir -p multi
+                  cat > multi/Directory.Build.props << 'EOF'
+                  <Project><PropertyGroup><Version>3.0.0</Version></PropertyGroup></Project>
+                  EOF
+                  cat > multi/package.json << 'EOF'
+                  {"name":"multi-test","version":"3.0.0"}
+                  EOF
+                  echo 'project(Multi VERSION 3.0.0)' > multi/CMakeLists.txt
 
-            -   name: Test action
-                id: bump
-                uses: ./
-                with:
-                    version_file: Directory.Build.props
-                    bump: ${{ matrix.bump }}
-                    version_element: .//Version
-                    custom_version: ${{ matrix.custom_version || '' }}
+            - name: Test plain text action
+              id: bump_text
+              uses: ./
+              with:
+                  version_file: VERSION
+                  bump: ${{ matrix.bump }}
+                  custom_version: ${{ matrix.custom_version || '' }}
 
-            -   name: Verify output
-                run: |
-                    [ "${{ steps.bump.outputs.version }}" = "${{ matrix.expected_new }}" ] || exit 1
-                    [ "${{ steps.bump.outputs.old_version }}" = "1.0.0" ] || exit 1
-                    [ "${{ steps.bump.outputs.tag }}" = "v${{ matrix.expected_new }}" ] || exit 1
+            - name: Test XML action
+              id: bump_xml
+              uses: ./
+              with:
+                  version_file: Directory.Build.props
+                  bump: ${{ matrix.bump }}
+                  version_element: .//Version
+                  custom_version: ${{ matrix.custom_version || '' }}
+
+            - name: Test JSON action
+              id: bump_json
+              uses: ./
+              with:
+                  version_file: package.json
+                  bump: ${{ matrix.bump }}
+                  custom_version: ${{ matrix.custom_version || '' }}
+
+            - name: Test additional version files
+              if: matrix.bump == 'patch'
+              id: bump_additional
+              uses: ./
+              with:
+                  version_file: multi.VERSION
+                  bump: patch
+                  additional_version_files: |
+                      multi/Directory.Build.props
+                      multi/package.json
+                      multi/CMakeLists.txt
+
+            - name: Test floating major tag
+              if: matrix.bump == 'patch'
+              id: bump_floating
+              uses: ./
+              with:
+                  version_file: floating.VERSION
+                  bump: patch
+                  tag: 'true'
+                  floating_major_version: 'true'
+                  floating_minor_version: 'true'
+
+            - name: Test floating minor tag
+              if: matrix.bump == 'patch'
+              id: bump_floating_minor
+              uses: ./
+              with:
+                  version_file: floating-minor.VERSION
+                  bump: patch
+                  tag: 'true'
+                  floating_minor_version: 'true'
+
+            - name: Verify all file types
+              run: |
+                  [ "${{ steps.bump_text.outputs.version }}" = "${{ matrix.expected_version }}" ] || exit 1
+                  [ "${{ steps.bump_text.outputs.old_version }}" = "${{ matrix.start_version }}" ] || exit 1
+                  [ "${{ steps.bump_text.outputs.tag }}" = "v${{ matrix.expected_version }}" ] || exit 1
+                  [ "${{ steps.bump_xml.outputs.version }}" = "${{ matrix.expected_version }}" ] || exit 1
+                  [ "${{ steps.bump_xml.outputs.old_version }}" = "${{ matrix.start_version }}" ] || exit 1
+                  [ "${{ steps.bump_xml.outputs.tag }}" = "v${{ matrix.expected_version }}" ] || exit 1
+                  [ "${{ steps.bump_json.outputs.version }}" = "${{ matrix.expected_version }}" ] || exit 1
+                  [ "${{ steps.bump_json.outputs.old_version }}" = "${{ matrix.start_version }}" ] || exit 1
+                  [ "${{ steps.bump_json.outputs.tag }}" = "v${{ matrix.expected_version }}" ] || exit 1
+                  grep -q "${{ matrix.expected_version }}" VERSION
+                  grep -q "<Version>${{ matrix.expected_version }}</Version>" Directory.Build.props
+                  python -c "import json; data=json.load(open('package.json')); assert data['version'] == '${{ matrix.expected_version }}'; assert data['name'] == 'test-package'"
+
+            - name: Verify additional version files
+              if: matrix.bump == 'patch'
+              run: |
+                  [ "${{ steps.bump_additional.outputs.version }}" = "3.0.1" ] || exit 1
+                  [ "${{ steps.bump_additional.outputs.old_version }}" = "3.0.0" ] || exit 1
+                  grep -q "3.0.1" multi.VERSION
+                  grep -q "<Version>3.0.1</Version>" multi/Directory.Build.props
+                  python -c "import json; assert json.load(open('multi/package.json'))['version'] == '3.0.1'"
+                  grep -q "VERSION 3.0.1" multi/CMakeLists.txt
+
+            - name: Verify floating major tag
+              if: matrix.bump == 'patch'
+              run: |
+                  [ "${{ steps.bump_floating.outputs.version }}" = "9.8.8" ] || exit 1
+                  [ "${{ steps.bump_floating.outputs.tag }}" = "v9.8.8" ] || exit 1
+                  [ "${{ steps.bump_floating.outputs.floating_major_tag }}" = "v9" ] || exit 1
+                  [ "${{ steps.bump_floating.outputs.floating_minor_tag }}" = "v9.8" ] || exit 1
+                  test "$(git rev-parse refs/tags/v9.8.8)" = "$(git rev-parse HEAD)"
+                  test "$(git rev-parse refs/tags/v9)" = "$(git rev-parse HEAD)"
+                  test "$(git rev-parse refs/tags/v9.8)" = "$(git rev-parse HEAD)"
+
+            - name: Verify floating minor tag
+              if: matrix.bump == 'patch'
+              run: |
+                  [ "${{ steps.bump_floating_minor.outputs.version }}" = "9.8.8" ] || exit 1
+                  [ "${{ steps.bump_floating_minor.outputs.tag }}" = "v9.8.8" ] || exit 1
+                  [ "${{ steps.bump_floating_minor.outputs.floating_minor_tag }}" = "v9.8" ] || exit 1
+                  test "$(git rev-parse refs/tags/v9.8)" = "$(git rev-parse HEAD)"
+
+            - name: Configure local remote for push test
+              if: matrix.bump == 'patch'
+              run: |
+                  git init --bare "$RUNNER_TEMP/version-bumper-remote.git"
+                  git remote set-url origin "$RUNNER_TEMP/version-bumper-remote.git"
+                  echo "9.7.0" > remote.VERSION
+                  mkdir -p remote
+                  cat > remote/Directory.Build.props << 'EOF'
+                  <Project><PropertyGroup><Version>9.7.0</Version></PropertyGroup></Project>
+                  EOF
+                  cat > remote/package.json << 'EOF'
+                  {"name":"remote-test","version":"9.7.0"}
+                  EOF
+                  echo 'project(Remote VERSION 9.7.0)' > remote/CMakeLists.txt
+
+            - name: Test remote push and floating tag update
+              if: matrix.bump == 'patch'
+              id: bump_remote_first
+              uses: ./
+              with:
+                  version_file: remote.VERSION
+                  bump: patch
+                  commit: 'true'
+                  tag: 'true'
+                  push: 'true'
+                  floating_major_version: 'true'
+                  floating_minor_version: 'true'
+                  additional_version_files: |
+                      remote/Directory.Build.props
+                      remote/package.json
+                      remote/CMakeLists.txt
+
+            - name: Verify first multi-file commit
+              if: matrix.bump == 'patch'
+              run: |
+                  test "$(git diff-tree --no-commit-id --name-only -r HEAD | wc -l | tr -d ' ')" = "4"
+                  git diff-tree --no-commit-id --name-only -r HEAD | grep -q '^remote.VERSION$'
+                  git diff-tree --no-commit-id --name-only -r HEAD | grep -q '^remote/Directory.Build.props$'
+                  git diff-tree --no-commit-id --name-only -r HEAD | grep -q '^remote/package.json$'
+                  git diff-tree --no-commit-id --name-only -r HEAD | grep -q '^remote/CMakeLists.txt$'
+
+            - name: Capture first floating tag revision
+              if: matrix.bump == 'patch'
+              run: echo "first_floating_sha=$(git ls-remote origin refs/tags/v9 | cut -f1)" >> "$GITHUB_ENV"
+
+            - name: Test remote floating tag force update
+              if: matrix.bump == 'patch'
+              id: bump_remote_second
+              uses: ./
+              with:
+                  version_file: remote.VERSION
+                  bump: patch
+                  commit: 'true'
+                  tag: 'true'
+                  push: 'true'
+                  floating_major_version: 'true'
+                  floating_minor_version: 'true'
+                  additional_version_files: |
+                      remote/Directory.Build.props
+                      remote/package.json
+                      remote/CMakeLists.txt
+
+            - name: Verify remote tags
+              if: matrix.bump == 'patch'
+              run: |
+                  [ "${{ steps.bump_remote_first.outputs.version }}" = "9.7.1" ] || exit 1
+                  [ "${{ steps.bump_remote_second.outputs.version }}" = "9.7.2" ] || exit 1
+                  [ "${{ steps.bump_remote_second.outputs.floating_major_tag }}" = "v9" ] || exit 1
+                  [ "${{ steps.bump_remote_second.outputs.floating_minor_tag }}" = "v9.7" ] || exit 1
+                  git ls-remote --exit-code origin refs/tags/v9.7.2
+                  git ls-remote --exit-code origin refs/tags/v9
+                  git ls-remote --exit-code origin refs/tags/v9.7
+                  second_floating_sha="$(git ls-remote origin refs/tags/v9 | cut -f1)"
+                  test "$first_floating_sha" != "$second_floating_sha"
+                  test "$(git diff-tree --no-commit-id --name-only -r HEAD | wc -l | tr -d ' ')" = "4"
